@@ -1,0 +1,32 @@
+/* REXX ****************************************************************
+*     Routine:                                                         *
+*     Purpose:                                                         *
+*       Calls:                                                         *
+*   Called By:                                                         *
+* File Needed:                                                         *
+*       Notes:                                                         *
+*     Updates:                                                         *
+***********************************************************************/
+ 
+/***********************************************************************
+* S T A R T                                                            *
+***********************************************************************/
+start:
+Address Cms 'Pipe Var dsname 1 | Var dsname'
+Address Cms 'Pipe Var recfm  1 | Var recfm'
+Address Cms 'Pipe Var member 1 | Var member'
+'EXTRACT /FN /FT /FM /W'
+If member ^= '' Then mm = 'MEMBER='member
+Else mm = ''
+'SET RESERVED 3 HIGH Browse dsname --->' dsname mm
+rf = Substr(Strip(recfm),1,1)
+If rf = 'F' | rf = 'V' Then 'RECFM' rf
+Else 'RECFM V'
+Address Cms 'Pipe (Stagesep +) Command Pipe Qsam MVSFLDD$ |' ,
+'XEDIT' fname.1 ftype.1 fmode.1 '+Var msger 1'
+If Rc ^= 0 Then 'QUIT'
+'TOP'
+'SET ALT 0'
+'SET PF3 QQUIT'
+'SET PF15 QQUIT'
+Exit
