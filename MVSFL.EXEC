@@ -1,0 +1,271 @@
+/**********************************************************************
+*  Routine: MVSFL EXEC                                                *
+*  Purpose: To show all datasets on an accessed OS disk.              *
+*  Calls:                                                             *
+*  Called By: MVSFL <dsn> mode                                        *
+*  File Needed:                                                       *
+*  Notes:        MVSFL XEDIT                                          *
+***********************************************************************/
+/***********************************************************************
+* S T A R T                                                            *
+***********************************************************************/
+start:
+Trace O
+Parse Upper Arg dsn mode .
+If mode = '' Then Do
+  mode = dsn
+  dsn = ''
+End
+msgid = 'MVSFL'
+If mode = '' Then Do
+  Say msgid||'01E Error, Format is:'
+  Say msgid||'01E MVSFL <dsn> mode'
+  Exit 12
+End
+Address Command
+Parse Value Diag(8c) With 3 numc 5 numl 7 .
+numc = X2d(C2x(numc))
+numl = X2d(C2x(numl))
+If numl < 24 | numc < 80 Then Do
+  Say msgid||'02E Command is only valid on display terminal'
+  Exit 8
+End
+If dsn = '*' Then dsn = ''
+If dsn = '' Then ldsn = ''
+Else Do
+  l = Length(dsn)
+  ldsn = 'Locate 44.'
+  If Substr(dsn,1,1) = '*' Then ldsn = ldsn||1 '/'Substr(dsn,1,1 - 1)'/|'
+  Else ldsn = ldsn||'44 /'Left(dsn,44)'/|'
+End
+rlist.1 = '   * * * Top of Dataset List * * *'
+rlist.0 = 1
+Address Cms
+Upper mode
+'Pipe Command LISTDS' mode '(FORMAT' ,
+ '| Drop 1' ,
+ ldsn ,
+ '| Spec 44.44 1' ,
+ '1.5 46' ,
+ '7.5 52.5 r',
+ '13.5 58.5 r',
+ '19.24 64' ,
+ '| Sort 1-44' ,
+ '| Stem rlist. Append'
+If Rc ^= 0 Then Do
+  Do i = 2 To rlist.0 - 1
+    Say rlist.i
+  End
+  Exit Rc
+End
+If rlist.0 = 0 Then Do
+  Say msgid||'03E Dataset not found on disk' mode
+  Exit 28
+End
+k = rlist.0
+k = k + 1
+rlist.k = '   * * * End of Dataset List * * *'
+rlist.0 = k
+volid = Substr(rlist.1,79,6)
+msger = ' '
+title1 = 'Filelist dataset on vol-id='volid'  access mode='mode
+title2 = '   Dataset name                              Dsorg   '
+title2 = title2||'LRECL  BLKS DSORG  DATE'
+pfline1 ='PF: 1=         2=          3=End      4=         5=         6='
+pfline2 ='PF: 7=Backward 8=Forward   9=        10=        11=Browse  12='
+'VSC DEF MVSFL' rlist.0 numc 2 5 '(PROTECT'
+'WIN DEF MVSFL' numl numc 1 1
+'WIN SHOW MVSFL ON MVSFL'
+'VSC WRI MVSFL 1 1 80 (RES PRO H FIELD' title1
+'VSC WRI MVSFL 2 1 80 (RES PRO H FIELD' title2
+'VSC WRI MVSFL -5 1 80 (RES PRO H FIELD' pfline1
+'VSC WRI MVSFL -4 1 80 (RES PRO H FIELD' pfline2
+'VSC WRI MVSFL -2 1 6  (RES PRO H FIELD ====>'
+'VSC WRI MVSFL -2 7 70 (RES NOPRO FIELD' Copies(' ',68)
+'VSC WRI MVSFL 1 1' rlist.0 * numc '(NOPRO FIELD  '
+Do i = 1 To rlist.0
+ 'VSC WRI MVSFL' i '1 80 (NOPRO DATA   ' Substr(rlist.i,1,77)
+End
+vsc = 'MVSFL'
+Call dispv
+ 
+/***********************************************************************
+* F I N I S H                                                          *
+***********************************************************************/
+finish:
+'VSC DEL MVSFL'
+'WIN DEL MVSFL'
+'VSC DEL MVSFLM'
+'WIN DEL MVSFLM'
+Exit
+ 
+/***********************************************************************
+* D I S P V                                                            *
+***********************************************************************/
+dispv:
+curpos = '2 1'
+Do Forever
+  If msger = 'MSGER' then msger = ''
+  'VSC WRI' vsc '-3 1 80 (RES PRO H FIELD' msger
+  If msger ^= '' Then 'VSC ALARM' vsc
+  'VSC CUR' vsc curpos
+  'VSC WAITREAD' vsc
+  msger = ' '
+  curpos = '-2 8 (R'
+  key = Subword(waitread.1,1,1)
+  Select
+    When key = 'ENTER' & waitread.0 > 2 Then Call enterk
+    When key = 'PFKEY' Then Do
+      pf = Subword(waitread.1,2,1)
+      Select
+        When pf = 3 | pf = 15 Then Return
+        When pf = 11 | pf = 23 Then Call edita
+        When pf = 8 | pf = 20 Then 'WIN F ='
+        When pf = 7 | pf = 19 Then 'WIN BA ='
+        Otherwise Iterate
+      End
+    End
+    Otherwise Iterate
+  End
+End
+ 
+/***********************************************************************
+* E N T E R K                                                          *
+***********************************************************************/
+enterk:
+cmd = ''
+Do i = 3 To waitread.0
+  If Subword(waitread.i,2,1) = '-2' Then Do
+    Parse Upper Value Subword(waitread.i,4) With cmd
+    Leave
+  End
+End
+If cmd = '' Then Return
+Select
+  When Abbrev('TOP',cmd,3) then 'WIN TOP ='
+  When Abbrev('BOTTOM',cmd,1) Then 'WIN B ='
+  When Substr(cmd,1,1) = '/' & Substr(cmd,2) ^= ' ' Then Call locate
+  Otherwise Do
+    If Subword(cmd,1,1) = 'CMS' Then cmd = Subword(cmd,2)
+    Address Cms cmd
+    If Rc < 0 Then msger = 'Unknown command'
+  End
+End
+Return
+ 
+/***********************************************************************
+* L O C A T E                                                          *
+***********************************************************************/
+locate:
+str = Substr(cmd,2)
+If vsc = 'MVSFL' Then Do
+  Do i = 2 To rlist.0 - 2
+    If Index(rlist.i,str) ^= 0 Then Leave
+  End
+  If i = rlist.0 - 1 Then i = 0
+End
+Else Do
+  Do i = 2 To lm.0 - 2
+    If Index(lm.i,str) ^= 0 Then Leave
+  End
+  If i = lm.0 - 1 Then i = 0
+End
+If i ^= 0 Then 'WIN SHOW' vsc 'ON' vsc i '1'
+Else msger = 'Target not found'
+Return
+ 
+/***********************************************************************
+* E D I T A                                                            *
+***********************************************************************/
+edita:
+If Subword(waitread.2,4,1) ^= 'DATA' Then Do
+  msger = 'Cursor not in valid data position'
+  Return
+End
+j = Subword(waitread.2,2,1)
+curpos = j '1'
+If vsc = 'MVSFLM' Then Do
+  member = lm.j
+  Call editl
+  Return
+End
+Parse Var rlist.j dsname 46 recfm 52 lrecl 58 blksize 64 dsorg 68 .
+member = ''
+If dsorg = 'PO' Then Do
+  Call editp
+  Return
+End
+If dsorg ^= 'PS' Then Do
+  msger = 'Dsorg 'dsorg' non supported'
+  Return
+End
+Call editl
+Return
+ 
+/***********************************************************************
+* E D I T P                                                            *
+***********************************************************************/
+editp:
+lm.1 = '   * * * Top of Member List * * *'
+lm.0 = 1
+'Pipe Command LISTDS' dsname mode '(PDS' ,
+ '| Drop 3' ,
+ '| Fblock 9' ,
+ '| Stem lm. Append'
+If Rc ^= 0 Then Do
+  msger = 'Error in list pds members'
+  Return
+End
+If lm.0 = 0 Then Do
+  msger = 'No member in directory'
+  Return
+End
+k = lm.0
+k = k + 1
+lm.k = '   * * * End of Member List * * *'
+lm.0 = k
+title3 = ' MEMBER LIST; DATASET='dsname
+'WIN HIDE' vsc
+'VSC DEF MVSFLM' lm.0 numc 2 5 '(PROTECT'
+'WIN DEF MVSFLM' numl numc 1 1
+'WIN SHOW MVSFLM ON MVSFLM'
+'VSC WRI MVSFLM 1 1 80 (RES PRO H FIELD' title3
+'VSC WRI MVSFLM 2 1 80 (RES PRO H FIELD  '
+'VSC WRI MVSFLM -5 1 80 (RES PRO H FIELD' pfline1
+'VSC WRI MVSFLM -4 1 80 (RES PRO H FIELD' pfline2
+'VSC WRI MVSFLM -2 1 6  (RES PRO H FIELD ====>'
+'VSC WRI MVSFLM -2 7 70 (RES NOPRO FIELD' Copies(' ',68)
+'VSC WRI MVSFLM 1 1' lm.0 * numc '(NOPRO FIELD  '
+Do i = 1 To lm.0
+ 'VSC WRI MVSFLM' i '1' numc '(PRO DATA ' lm.i
+End
+svsc = vsc
+vsc = 'MVSFLM'
+scur = curpos
+Call dispv
+'VSC DEL MVSFLM'
+'WIN DEL MVSFLM'
+vsc = svsc
+curpos = scur
+'WIN SHOW' vsc
+Return
+ 
+/***********************************************************************
+* E D I T L                                                            *
+***********************************************************************/
+editl:
+fn = 'MVS'
+ft = 'DATASET'
+If member ^= '' Then Do
+  fn = member
+  ft = 'MEMBER'
+End
+If lrecl = '' Then xw = blksize
+Else xw = lrecl
+If member ^= '' Then fip = '(MEMBER' member
+Else fip = ''
+'FILEDEF MVSFLDD$ CLEAR'
+'FILEDEF MVSFLDD$' mode 'DSN' dsname fip
+'XEDIT' fn ft mode '(W' xw 'PROFILE MVSFL)' dsname
+'FILEDEF MVSFLDD$ CLEAR'
+Return
