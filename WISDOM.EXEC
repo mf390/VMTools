@@ -1,0 +1,44 @@
+/* REXX ****************************************************************        
+*     Routine: WISDOM EXEC                                             *        
+*     Purpose: Say something (a fortune cookie program)                *        
+*       Calls: None                                                    *        
+*   Called By: WISDOM                                                  *        
+* File Needed: WISDOM DATA                                             *        
+*       Notes: Put a call to this in your PROFILE EXEC                 *        
+*     Updates:                                                         *        
+***********************************************************************/        
+                                                                                
+/***********************************************************************        
+* S T A R T                                                            *        
+***********************************************************************/        
+start:                                                                          
+Trace O                                                                         
+'MAKEBUF'                                                                       
+buffer_rc = Rc                                                                  
+'LISTFILE WISDOM DATA * (NOH LIFO ALL'                                          
+If Rc ^= 0 Then Do                                                              
+   Say Centre('*** Fortune Cookies (WISDOM DATA) not found ***',80)             
+   Exit Rc                                                                      
+End                                                                             
+Parse Pull . . . . . filesize .                                                 
+'DROPBUF' buffer_rc                                                             
+grape = Random(1,filesize - 1,Time('S'))                                        
+Do 50                                                                           
+  grape = Random(1,filesize - 1)                                                
+  'EXECIO 1 DISKR WISDOM DATA *' grape                                          
+  If Queued() = 0 Then Iterate                                                  
+  Parse Pull line                                                               
+  If Left(line,1) ^= '#' Then Iterate                                           
+  Leave                                                                         
+End                                                                             
+Say Substr(line,2)                                                              
+line = ''                                                                       
+Do While Left(line,1) ^= '#'                                                    
+  grape = grape + 1                                                             
+  'EXECIO 1 DISKR WISDOM DATA *' grape                                          
+  If Queued() Then Parse Pull line                                              
+  Else Leave                                                                    
+  If Left(line,1) ^= '#' Then Say line                                          
+End                                                                             
+'FINIS WISDOM DATA *'                                                           
+Exit 0       
