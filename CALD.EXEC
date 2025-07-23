@@ -1,0 +1,211 @@
+/* Function: Displays a calendar for any given month. Not fullscreen  */
+/* Created : A long time ago but someone                              */
+/* Calls   :                                                          */
+/* Called  :                                                          */
+/* Updates :                                                          */
+/* Notes   :                                                          */
+/**********************************************************************/
+ 
+/***********************************************************************
+* S T A R T                                                            *
+***********************************************************************/
+start:
+Trace o
+Address Command
+ 
+/***********************************************************************
+* G E T _ C M S L E V E L                                              *
+***********************************************************************/
+get_cmslevel:
+'QUERY CMSLEVEL (LIFO)'
+Pull . . cmslevel .
+cmslevel = Left(cmslevel,1)
+if cmslevel > 4 Then Do
+  'QUERY FULLSCREEN (LIFO)'
+  Pull . fullscreen_setting .
+  fullscreen = Word(Diagrc(24,-1),2) = 0
+End
+Else Do
+  fullscreen_setting = 'OFF'
+  fullscreen = 0
+End
+ 
+/***********************************************************************
+* C R E A T E _ D I S P L A Y                                          *
+***********************************************************************/
+create_display:
+If fullscreen Then Do
+  'QUERY DISPLAY (LIFO)'
+  Parse Pull . lines cols devtype addrtype dbcs color exthi pss pssets
+  'QUERY VSCREEN CALENDAR (LIFO)'
+  If Rc = 0 Then Pull .
+  Else 'VSCREEN DEFINE CALENDAR 10 23 0 2 (BLUE REV'
+  'QUERY WINDOW MONTH (LIFO)'
+  If Rc = 0 Then Pull .
+  Else
+  'WINDOW DEFINE MONTH 12 23 4 54 (FIXED BORDER POP NOTOP USER)'
+  'SET BORDER MONTH ON ( WHITE REV'
+  'WINDOW SHOW MONTH ON CALENDAR 1 2'
+  'SET LOCATION MONTH OFF'
+  'VSCREEN CLEAR CALENDAR'
+  pfl1 = 'F3=   Quit  9= Cancel '
+  pfl2 = '7/8=-/+Mon 10/11=-/+Yr'
+  pflopt = 'RES NOHI FIELD'
+  'VSCREEN WRITE CALENDAR -2 1' Length(pfl1)+1 '(' pflopt pfl1
+  'VSCREEN WRITE CALENDAR -1 1' Length(pfl2)+1 '(' pflopt pfl2
+End
+ 
+/***********************************************************************
+* C R E A T E _ M O N T H                                              *
+***********************************************************************/
+create_month:
+Parse Arg mm '/' yr .
+Do Until ^fullscreen
+  week_mask=' XX XX XX XX XX XX XX'
+  month_list= 'January February March April May June July',
+     'August September October November December'
+  Parse Value Date('S') With thisyear 5 thismonth 7 thisday .
+  If mm = '' Then mm = thismonth
+  If yr = '' Then yr = thisyear
+  If mm < 1 ! mm > 12 ! ^Datatype(yr,'W') ! yr < 0
+  Then Signal help
+  If yr < 100 Then yr = yr + thisyear % 100 * 100
+  mm = mm + 0
+  yr = yr + 0
+  If mm = thismonth & yr = thisyear
+  Then day_of_month = thisday + 0
+  Else day_of_month = 0
+  dd=1
+  leapYear = yr // 400 = 0 ! (yr // 4 = 0 & yr // 100 <> 0 )
+  julian = yr !! right( 275 * mm % 9 + dd - ,
+   (((mm + 9) % 12 ) * ( 1 + (^LeapYear))) - 30, 3, 0 )
+  lastyear = yr - 1
+  base = lastyear * 365 + lastyear % 4 - lastyear % 100 +,
+   lastyear % 400 + Right(julian,3) - 1
+  day_index = (base + 1) // 7 + 1
+  out_week = week_mask
+  Call output ' 'Center(Word(month_list,mm) yr,21)
+  Call output ' Su Mo Tu We Th Fr Sa'
+  Call output ' --------------------'
+  day_count = Word('31 28 31 30 31 30 31 31 30 31 30 31',mm)
+  If (day_count = 28) & LeapYear Then day_count = 29
+  line = 4
+  dom_line = line
+  Do day = 1 To day_count
+    position = Wordindex(out_week,day_index)
+    out_week = Overlay(Right(day,2),out_week,position,2)
+    day_index = day_index + 1
+    If day_index > 7 Then Call print_week
+  End
+  If Verify(out_week,'X ') > 0 Then Call print_week
+  Call output ' --------------------'
+  If line < 10 Then Call output ' '
+  If fullscreen Then Do
+    If day_of_month > 0 Then Do
+      If exthi = 'EXTHI' Then today_opt = 'NONE'
+       Else today_opt = 'HIGH'
+     'VSCREEN WRITE CALENDAR',
+     dom_line hilight Length(day_of_month) + 1 ,
+      '('today_opt 'FIELD' day_of_month
+    End
+    'VSCREEN CURSOR CALENDAR 1 2'
+    'VSCREEN WAITREAD CALENDAR'
+    Parse Var waitread.1 whatkey .
+    If whatkey = 'PFKEY' Then Do
+      Parse Var waitread.1 . whatkey .
+      If whatkey > 12 Then whatkey = whatkey - 12
+      whatkey = 'PFKEY'whatkey
+    End
+    Select
+      When whatkey = 'PFKEY3'  Then Do
+        If (fullscreen_setting <> 'ON') Then Call delete
+         Leave
+      End
+      When whatkey = 'PFKEY7'  Then mm = mm-1
+      When whatkey = 'PFKEY8'  Then mm = mm+1
+      When whatkey = 'PFKEY10' Then yr = yr-1
+      When whatkey = 'PFKEY11' Then yr = yr+1
+      When whatkey = 'PFKEY9'  Then Do
+        Call delete
+        Leave
+      End
+      Otherwise 'VSCREEN ALARM CALENDAR'
+    End
+    If mm < 1 Then Do
+      mm = 12
+      yr = yr-1
+    End
+    Else If mm > 12 Then Do
+      mm = 1
+      yr = yr+1
+    End
+    'VSCREEN CLEAR CALENDAR'
+  End
+End
+Exit
+ 
+/***********************************************************************
+* D E L E T E                                                          *
+***********************************************************************/
+delete:
+typing = Cmsflag(Cmstype)
+'SET CMSTYPE HT'
+'WINDOW DELETE MONTH'
+'VSCREEN DELETE CALENDAR'
+If typing Then 'SET CMSTYPE RT'
+Return
+ 
+/***********************************************************************
+* P R I N T _ W E E K                                                  *
+***********************************************************************/
+print_week:
+place = Find(out_week,day_of_month)
+If place > 0 Then Do
+  place = Wordindex(out_week,place)
+  If fullscreen Then Do
+    dom_line = line
+    hilight = place
+  End
+  Else Do
+    out_week = Overlay(x2c('1D'),out_week,,
+     place + length(day_of_month))
+    out_week = Insert(x2c('60'),out_week,,
+     place + length(day_of_month))
+    out_week = Overlay(x2c('1D'),out_week,place-1)
+    out_week = Insert(x2c('E8'),out_week,place-1)
+  End
+End
+Call Output Translate(out_week,' ','X')
+line = line + 1
+out_week = week_mask
+day_index = 1
+Return
+ 
+/***********************************************************************
+* O U T P U T                                                          *
+***********************************************************************/
+output:
+Parse Arg string
+If fullscreen
+ Then 'VSCREEN WRITE CALENDAR 0 0 0 ( FIELD' string
+Else Say string
+Return
+ 
+/***********************************************************************
+* H E L P                                                              *
+***********************************************************************/
+help:
+Parse Source . . . . . myname .
+Upper myname
+Parse Value Date('S') With thisyear 5 thismonth 7 thisday .
+If fullscreen & (fullscreen_setting <> 'ON') Then Call delete
+fullscreen = fullscreen_setting = 'ON'
+Call Output 'Syntax is'
+Call Output '"'myname 'MM/YY"'
+Call Output 'where "MM" is 1-12'
+Call Output 'and "YY" is the year,'
+Call Output 'e.g.' myname thismonth+0'/'right(thisyear,2)
+Call Output 'or' myname thismonth++0'/'thisyear'.'
+Call Output 'The defaults are the'
+Call Output 'current month and year.'
+Exit
