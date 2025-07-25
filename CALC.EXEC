@@ -1,0 +1,1422 @@
+/**********************************************************************         
+*  Routine: CALC EXEC                                                 *         
+*  Purpose: Fullscreen scientific calculator                          *         
+*  Calls:                                                             *         
+*  Called By:                                                         *         
+*  File Needed:                                                       *         
+*  Notes:                                                             *         
+***********************************************************************/        
+                                                                                
+/***********************************************************************        
+* S T A R T                                                            *        
+***********************************************************************/        
+start:                                                                          
+Trace O                                                                         
+'VMFCLEAR'                                                                      
+Parse Arg firstline                                                             
+If firstline = '?' ! firstline = '??' Then Do                                   
+  Call helpinfo firstline                                                       
+  'WINDOW DELETE CALCHELP'                                                      
+  'VSCREEN DELETE CALCHELP'                                                     
+  Exit                                                                          
+End                                                                             
+Parse Var firstline expression ':' precision .                                  
+If precision ^= '' Then Numeric Digits precision                                
+pi = 1 * Pi53()                                                                 
+e = 1 * E53()                                                                   
+Signal On Syntax                                                                
+Signal On Halt                                                                  
+If expression ^= '' Then Do                                                     
+  Interpret 'Say' expression                                                    
+  Exit                                                                          
+End                                                                             
+Call window_setup                                                               
+'QUERY LOGFILE CALC (LIFO'                                                      
+Parse Pull . . onoff .                                                          
+logging = onoff = 'ON'                                                          
+Call set_logfile                                                                
+'GLOBALV SELECT CALC GET LAST'                                                  
+If last = '' Then last = 0                                                      
+'VSCREEN WRITE CALC -3 1 6 (RESERVED HI FIELD ====>'                            
+pf.1 = 'Help'                                                                   
+pf.2 = 'File'                                                                   
+pf.3 = 'Quit'                                                                   
+pf.5 = 'Save'                                                                   
+pf.6 = 'Restore'                                                                
+pf.7 = 'Back'                                                                   
+pf.8 = 'Forward';                                                               
+pf.11 = '->Xedit'                                                               
+pf.12 = 'Cursor'                                                                
+pflist1 = '1='pf.1 '2='pf.2 '3='pf.3 '5='pf.5 '6='pf.6                          
+pflist2 = '7='pf.7 '8='pf.8 '11='pf.11 '12='pf.12                               
+'VSCREEN WRITE CALC -2 1 40 (RESERVED HI FIELD' pflist1                         
+'VSCREEN WRITE CALC -1 1 40 (RESERVED HI FIELD' pflist2                         
+'VSCREEN WRITE CALC 0 1 36 (NOHI FIELD Enter an expression'                     
+Call calc_bottom                                                                
+'VSCREEN CURSOR CALC 0 2 (DATA'                                                 
+Do Forever                                                                      
+  'VSCREEN WAITREAD CALC'                                                       
+  xedit = 0                                                                     
+  If Rc = 0 Then Do                                                             
+    Parse Var waitread.1 key key_number .                                       
+    If key_number > 12 Then key_number = key_number - 12                        
+  End                                                                           
+  Else waitread.0 = 0                                                           
+  cursor_pos = '0 2'                                                            
+  Select                                                                        
+    When Rc = 4 Then Call window_setup_calc                                     
+    When Rc <> 0 Then Call bailout Rc                                           
+    When key = 'PFKEY' Then Do                                                  
+      Select                                                                    
+        When key_number = 1 Then Call helpinfo '??'                             
+        When key_number = 2 Then Do                                             
+          logging = ^logging                                                    
+          Call set_logfile                                                      
+        End                                                                     
+        When key_number = 3 Then Do                                             
+          waitread.0 = 2                                                        
+          'WINDOW DROP CALC'                                                    
+          Leave                                                                 
+        End                                                                     
+        When key_number = 5 Then Call save                                      
+        When key_number = 6 Then Call restore                                   
+        When key_number = 7 Then Do                                             
+          'WINDOW BACKWARD CALC'                                                
+          cursor_pos = 'cmdline'                                                
+        End                                                                     
+        When key_number = 8 Then Do                                             
+          'WINDOW FORWARD CALC'                                                 
+          cursor_pos = 'cmdline'                                                
+        End                                                                     
+        When key_number = 11 Then xedit = 1                                     
+        When key_number = 12 Then Do                                            
+          'QUERY CURSOR CALC (LIFO'                                             
+          Pull . '(' where .                                                    
+          If where = 'DATA' Then cursor_pos = 'cmdline'                         
+        End                                                                     
+        Otherwise Do                                                            
+          'VSCREEN ALARM CALC'                                                  
+          Call msg 'PF Key' key_number 'does not have' ,                        
+           'any function here.'                                                 
+        End                                                                     
+      End                                                                       
+    End                                                                         
+    When key = 'PAKEY' Then Select                                              
+      When key_number = 1 Then 'WINDOW POP WM'                                  
+      When key_number = 2 Then Do                                               
+        Call window_delete                                                      
+        waitread.0 = 2                                                          
+        Leave                                                                   
+      End                                                                       
+      Otherwise Nop                                                             
+    End                                                                         
+    When key = 'CLEAR' Then 'VSCREEN CLEAR CALC'                                
+    When key = 'ENTER' Then Nop                                                 
+    Otherwise 'VSCREEN ALARM CALC'                                              
+  End                                                                           
+  Do i = 3 to waitread.0                                                        
+    Parse Var waitread.i field_type field_line field_col argument               
+    If argument = '?' ! argument = '??' Then Call helpinfo argument             
+    Else Do                                                                     
+      Call output argument                                                      
+      Select                                                                    
+        When field_type = 'DATA' Then Call interpret_it argument                
+        When field_type = 'RESERVED' Then Do                                    
+          Call execute_it argument                                              
+          cursor_pos = 'cmdline'                                                
+        End                                                                     
+        Otherwise Call msg 'Unexpected data:' waitread.i                        
+      End                                                                       
+    End                                                                         
+  End                                                                           
+  'VSCREEN WAITT *'                                                             
+  If cursor_pos = 'cmdline'                                                     
+  Then 'VSCREEN CURSOR CALC -3 8 (RESERVED'                                     
+  Else Do                                                                       
+    Call calc_bottom                                                            
+    'VSCREEN CURSOR CALC' cursor_pos '(DATA'                                    
+  End                                                                           
+End                                                                             
+Exit                                                                            
+                                                                                
+/***********************************************************************        
+* I N T E R P R E T _ I T                                              *        
+***********************************************************************/        
+interpret_it:                                                                   
+Procedure Expose xedit last pi e                                                
+Parse Arg #_argument_#                                                          
+#_symbol_# = ''                                                                 
+#_xedit_# = xedit                                                               
+Address Command 'GLOBALV SELECT CALC GET #_LIST_#'                              
+#_word1_# = Translate(Word(#_argument_#,1))                                     
+If #_word_# = 'SET' Then Do                                                     
+  Parse Var #_argument_# . #_symbol_# '=' #_expression_#                        
+  #_symbol_# = Translate(Strip(#_symbol_#))                                     
+  If Datatype(#_symbol_#,'SYMBOL') Then Do                                      
+    #_argument_# = #_expression_#                                               
+    If Find(#_list_#,#_symbol_#) = 0                                            
+    Then #_list_# = #_list_# #_symbol_#                                         
+  End                                                                           
+  Else Do                                                                       
+    #_symbol_# = ''                                                             
+    Call msg "Syntax is 'SET variable = expression'"                            
+  End                                                                           
+End                                                                             
+Address Command 'GLOBALV SELECT CALC GET' #_list_#                              
+Parse Var #_argument_# #_expression_#                                           
+If #_symbol_# = '' Then Do                                                      
+  If (Pos(Left(#_word1_#,1), '+-/%*!&=^><') > 0) ,                              
+   & (Symbol('LAST') = 'VAR')                                                   
+  Then #_expression_# = 'LAST' #_expression_#                                   
+  Interpret 'LAST=' #_expression_#                                              
+  Call output '               ' last                                            
+End                                                                             
+Else Do                                                                         
+  Interpret #_symbol_# '=' #_expression_#                                       
+  last = Value(#_symbol_#)                                                      
+  Address Command 'GLOBALV SELECT CALC PUT #_LIST_#' #_list_#                   
+  #_label_# = #_symbol_#                                                        
+  If Length(#_label_#) < 15 Then #_label_# = Left(#_label_#,15)                 
+  Call output #_label_# '=' last                                                
+  If #_xedit_# Then Call xout last                                              
+  xedit = #_xedit_#                                                             
+End                                                                             
+'GLOBALV SELECT CALC PUT LAST'                                                  
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* E X E C U T E _ I T                                                  *        
+***********************************************************************/        
+execute_it:                                                                     
+Procedure Expose xedit                                                          
+Parse Arg argument                                                              
+Address Command 'VSCREEN WAITT *'                                               
+If xedit Then Address Xedit                                                     
+Else Address Cms                                                                
+Argument                                                                        
+If Rc <> 0 Then readycode = '('Rc')'                                            
+Else readycode = ''                                                             
+Address                                                                         
+If xedit Then Do                                                                
+  If Rc = -3 Then Call msg 'There is no active XEDIT file.'                     
+  Else Address Xedit 'COMMAND REFRESH'                                          
+End                                                                             
+Call output 'Ready'readycode';'                                                 
+Call calc_bottom                                                                
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* O U T P U T                                                          *        
+***********************************************************************/        
+output:                                                                         
+Procedure                                                                       
+Address Command                                                                 
+Parse Arg message                                                               
+'VSCREEN WRITE CALC 0 1 40 (NOHI FIELD' message                                 
+retcode = Rc                                                                    
+If retcode <> 0 Then Say message                                                
+Return retcode                                                                  
+                                                                                
+/***********************************************************************        
+* X O U T                                                              *        
+***********************************************************************/        
+xout:                                                                           
+Procedure                                                                       
+Address Command                                                                 
+Parse Arg value                                                                 
+Address Xedit 'COMMAND INPUT' value                                             
+If Rc = -3 Then Call msg 'There is no active XEDIT file.'                       
+Else Do                                                                         
+  If Rc <> 0 Then Call msg 'XEDIT return code' Rc                               
+  Address Xedit 'COMMAND REFRESH'                                               
+End                                                                             
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* S A V E                                                              *        
+***********************************************************************/        
+save:                                                                           
+Procedure                                                                       
+Address Command                                                                 
+Parse Source . . #_name_# #_type_# #_mode_# .                                   
+#_mymemory_# = #_name_# 'MEMORY A'                                              
+'GLOBALV SELECT CALC GET #_LIST_#'                                              
+If Words(#_list_#) = 0 Then Do                                                  
+  Call output('There are no variables to save.')                                
+  Return ''                                                                     
+End                                                                             
+'GLOBALV SELECT CALC GET' #_list_#                                              
+'ERASE' #_mymemory_#                                                            
+#_list_# = Strip(#_list_#)                                                      
+Do While #_list_# <> ''                                                         
+  Parse Var #_list_# #_symbol_# #_list_#                                        
+  #_value_# = Value(#_symbol_#)                                                 
+  #_pos_# = 1                                                                   
+  If Datatype(#_value_#) = 'CHAR' Then Do                                       
+    Do Until #_pos_# = 0                                                        
+      #_pos_# = Pos("'",#_value_#,#_pos_#)                                      
+      If #_pos_# > 0 Then Do                                                    
+        #_value_# = Insert("'",#_value_#,#_pos_#)                               
+        #_pos_# = #_pos_# + 2                                                   
+      End                                                                       
+    End                                                                         
+    #_value_# = "'"#_value_#"'"                                                 
+  End                                                                           
+  'EXECIO 1 DISKW' #_mymemory_# '(ST SET' #_string_# '=' #_value_#              
+End                                                                             
+'FINIS' #_mymemory_#                                                            
+Call output 'Variables saved.'                                                  
+Return ''                                                                       
+                                                                                
+/***********************************************************************        
+* R E S T O R E                                                        *        
+***********************************************************************/        
+restore:                                                                        
+Procedure Expose last xedit pi e                                                
+Address Command                                                                 
+Parse Source . . myfilename myfiletype myfilemode .                             
+mymemory = myfilename 'MEMORY A'                                                
+Arg memoryfile                                                                  
+If memoryfile = '' Then memoryfile = mymemory                                   
+'STATE' memoryfile                                                              
+If Rc <> 0 Then Do                                                              
+  If memoryfile <> mymemory Then memoryfile = mymemory                          
+  'STATE' memoryfile                                                            
+  If Rc <> 0 Then Do                                                            
+    Call output 'There are no variables to restore.'                            
+    Return ''                                                                   
+  End                                                                           
+End                                                                             
+'EXECIO * DISKR' memoryfile '(FINIS STEM MEM.'                                  
+'GLOBALV SELECT CALC PURGE'                                                     
+Do i = 1 To mem.0                                                               
+  Call interpret_it mem.i                                                       
+End                                                                             
+Return ''                                                                       
+                                                                                
+/***********************************************************************        
+* P I 5 3                                                              *        
+***********************************************************************/        
+pi53:                                                                           
+Procedure                                                                       
+Return 3.1415926535897932384626433832795028841971693993751061                   
+                                                                                
+/***********************************************************************        
+* E 5 3                                                                *        
+***********************************************************************/        
+e53:                                                                            
+Procedure                                                                       
+Return 2.7182818284509452353602874713526624977572470936999595                   
+                                                                                
+/***********************************************************************        
+* L N T E N 5 3                                                        *        
+***********************************************************************/        
+lnten53:                                                                        
+Procedure                                                                       
+Return 2.3025850929940456840179914546843642076011014886287714                   
+                                                                                
+/***********************************************************************        
+* L N T W O 5 3                                                        *        
+***********************************************************************/        
+lntwo53:                                                                        
+Procedure                                                                       
+Return 0.6931471805599453094172321214817656807550013436025524                   
+                                                                                
+/***********************************************************************        
+* !                                                                    *        
+***********************************************************************/        
+!:                                                                              
+Procedure                                                                       
+Arg n                                                                           
+If n = 'UNDEFINED' Then Return 'UNDEFINED'                                      
+If n = '' Then Do                                                               
+  Call say 'Syntax for the factorial function:'                                 
+  Call say '   !(N) or FAC(N) or FACT(N)'                                       
+  Call msg 'Result is   N * (N-1) * (N-2) * ... * (1)'                          
+  Return ''                                                                     
+End                                                                             
+If Datatype(n) - 'CHAR' Then Return 'UNDEFINED'                                 
+If n > 240 Then Do                                                              
+  Call msg 'Factorial too large.'                                               
+  Return 'UNDEFINED'                                                            
+End                                                                             
+If n < 0 Then Return 'UNDEFINED'                                                
+If n = 1 Then Return 1                                                          
+Return n * !(n - 1)                                                             
+                                                                                
+/***********************************************************************        
+* F A C                                                                *        
+***********************************************************************/        
+fac:                                                                            
+Procedure                                                                       
+Arg n                                                                           
+Return !(n)                                                                     
+                                                                                
+/***********************************************************************        
+* F A C T                                                              *        
+***********************************************************************/        
+fact:                                                                           
+Procedure                                                                       
+Arg n                                                                           
+Return !(n)                                                                     
+                                                                                
+/***********************************************************************        
+* M O D                                                                *        
+***********************************************************************/        
+mod:                                                                            
+Procedure                                                                       
+Arg extent , modulus                                                            
+If modulus = '' Then modulus = 1                                                
+If modulus = 'UNDEFINED' ! extent = 'UNDEFINED' Then Return 'UNDEFINED'         
+If extent = '' Then Do                                                          
+  Call say 'Syntax for the modulus function:'                                   
+  Call say '   MOD(NUMBER,MODULUS)'                                             
+  Call say 'Result is the remainder after the division'                         
+  Call say '   NUMBER/MODULUS'                                                  
+  Call say 'If MODULUS is absent it is assumed to be 1.'                        
+  Return ''                                                                     
+End                                                                             
+If Datatype(extent) = 'CHAR' ! Datatype(modulus) = 'CHAR'                       
+Then Return 'UNDEFINED'                                                         
+Return extent // modulus                                                        
+                                                                                
+/***********************************************************************        
+* R N D                                                                *        
+***********************************************************************/        
+rnd:                                                                            
+Procedure                                                                       
+Return Random() / 1000                                                          
+                                                                                
+/***********************************************************************        
+* S Q R                                                                *        
+***********************************************************************/        
+sqr:                                                                            
+Procedure                                                                       
+Arg square                                                                      
+If square = 'UNDEFINED' Then Return 'UNDEFINED'                                 
+If square = '' Then Do                                                          
+  Call say 'Syntax of the square root function:'                                
+  Call say '   SQR(NUMBER) or SQRT(NUMBER)'                                     
+  Call say 'Result is the number which times itself = NUMBER'                   
+  Call say 'If NUMBER is negative, the imaginary root is'                       
+  Call msg 'displayed.'                                                         
+  Return ''                                                                     
+End                                                                             
+If Datatype(square) - 'CHAR' Then Return 'UNDEFINED'                            
+If square = 0 Then Return 0                                                     
+If square < 0 Then Do                                                           
+  Call msg 'Square root is i'Sqr(-square)                                       
+  Return 'UNDEFINED'                                                            
+End                                                                             
+Parse Numeric prec .                                                            
+root = 1                                                                        
+Do i = 1 to prec * 3                                                            
+  root = (root + (square / root)) / 2                                           
+End                                                                             
+Return root                                                                     
+                                                                                
+/***********************************************************************        
+* S Q R T                                                              *        
+***********************************************************************/        
+sqrt:                                                                           
+Procedure                                                                       
+Arg square                                                                      
+Return Sqr(square)                                                              
+                                                                                
+/***********************************************************************        
+* P I                                                                  *        
+***********************************************************************/        
+pi:                                                                             
+Procedure                                                                       
+Arg places                                                                      
+If places = '' Then Do                                                          
+  Parse Numeric prec .                                                          
+  places = prec                                                                 
+End                                                                             
+If places < 54 Then Return 1 * Pi53()                                           
+pie = 4 * (4 * atan(1 / 5) - Atan(1 / 239))                                     
+Return pie                                                                      
+                                                                                
+/***********************************************************************        
+* S I N                                                                *        
+***********************************************************************/        
+sin:                                                                            
+Procedure                                                                       
+Arg angle                                                                       
+If angle = 'UNDEFINED' Then Return 'UNDEFINED'                                  
+If angle = '' Then Do                                                           
+  Call say 'Syntax of the sine function:'                                       
+  Call say '   SIN(ANGLE)    SIN(RAD(DANGLE))'                                  
+  Call say 'Result is the sine of ANGLE radians or of'                          
+  Call say 'DANGLE degress.'                                                    
+  Call say 'The evaluation of SIN(RAD(180)) and'                                
+  Call msg 'SIN(3.14159) are the same.'                                         
+  Return ''                                                                     
+End                                                                             
+If Datatype(angle) = 'CHAR' Then Return 'UNDEFINED'                             
+angle = angle // (Pi() * 2)                                                     
+If angle = 0 Then Return 0                                                      
+Parse Numeric prec .                                                            
+sum = angle                                                                     
+sign = -1                                                                       
+Do k = 3 To prec * 5 by 2                                                       
+  sum = sum + sign * angle ** l / !(k)                                          
+  sign = -sign                                                                  
+End                                                                             
+Return 1 * sum                                                                  
+                                                                                
+/***********************************************************************        
+* C O S                                                                *        
+***********************************************************************/        
+cos:                                                                            
+Procedure                                                                       
+Arg angle                                                                       
+If angle = 'UNDEFINED' Then Return 'UNDEFINED'                                  
+If angle = '' Then Do                                                           
+  Call say 'Syntax of the cosine function:'                                     
+  Call say '   COS(ANGLE)    COS(RAD(DANGLE))'                                  
+  Call say 'Result is the cosine of ANGLE radians or of'                        
+  Call say 'DANGLE degress.'                                                    
+  Call say 'The evaluation of COS(RAD(180)) and'                                
+  Call msg 'COS(3.14159) are the same.'                                         
+  Return ''                                                                     
+End                                                                             
+If Datatype(angle) = 'CHAR' Then Return 'UNDEFINED'                             
+angle = angle // (Pi() * 2)                                                     
+If angle = 0 Then Return 1                                                      
+Parse Numeric prec .                                                            
+sum = 1                                                                         
+sign = -1                                                                       
+Do k = 2 to prec * 5 by 2                                                       
+  sum = sum + sign * angle ** k/ !(k)                                           
+  sign = -sign                                                                  
+End                                                                             
+Return 1 * sum                                                                  
+                                                                                
+/***********************************************************************        
+* T A N                                                                *        
+***********************************************************************/        
+tan:                                                                            
+Procedure                                                                       
+Arg angle                                                                       
+If angle = 'UNDEFINED' Then Return 'UNDEFINED'                                  
+If angle = '' Then Do                                                           
+  Call say 'Syntax of the tangent function:'                                    
+  Call say '   TAN(ANGLE)    TAN(RAD(DANGLE))'                                  
+  Call say 'Result is the tangent of ANGLE radians or of'                       
+  Call say 'DANGLE degress.'                                                    
+  Call say 'The evaluation of TAN(RAD(180)) and'                                
+  Call msg 'TAN(3.14159) are the same.'                                         
+  Return ''                                                                     
+End                                                                             
+If Datatype(angle) = 'CHAR' Then Return 'UNDEFINED'                             
+angle = angle // (Pi() * 2)                                                     
+Return Sin(angle) / Cos(angle)                                                  
+                                                                                
+/***********************************************************************        
+* A S I N                                                              *        
+***********************************************************************/        
+asin:                                                                           
+Procedure                                                                       
+Arg sine                                                                        
+If sine = 'UNDEFINED' Then Return 'UNDEFINED'                                   
+If sine = '' Then Do                                                            
+  Call say 'Syntax of the arc sine function:   ASIN(SINE)'                      
+  Call msg 'Result is the angle whose sine is SINE.'                            
+  Return ''                                                                     
+End                                                                             
+If Datatype(sine) = 'CHAR' Then Return 'UNDEFINED'                              
+If sine = 0 Then Return 0                                                       
+If sine = 1 Then Return Pi() / 2                                                
+If sine = -1 Then Return 3 * Pi() / 2                                           
+If sine * sine > 1 Then Return 'UNDEFINED'                                      
+Parse Numeric prec .                                                            
+sum = sine                                                                      
+count = 2                                                                       
+fact = .5                                                                       
+Do i = 1 to prec * 5                                                            
+  k = 2 * i+1                                                                   
+  sum = sum + fact * sine ** k / k                                              
+  count = count + 2                                                             
+  fact = fact * ((count - 1) / count)                                           
+End                                                                             
+Return 1 * sum                                                                  
+                                                                                
+/***********************************************************************        
+* A C O S                                                              *        
+***********************************************************************/        
+acos:                                                                           
+Procedure                                                                       
+Arg cosine                                                                      
+If cosine = 'UNDEFINED' Then Return 'UNDEFINED'                                 
+If cosine = '' Then Do                                                          
+  Call say 'Syntax of the arc cosine function:   ACOS(COSINE)'                  
+  Call msg 'Result is the angle whose cosine is COSINE.'                        
+  Return ''                                                                     
+End                                                                             
+If Datatype(cosine) = 'CHAR' Then Return 'UNDEFINED'                            
+If cosine * cosine > 1 Then Return 'UNDEFINED'                                  
+If cosine = 0 Then Return Pi() / 2                                              
+If cosine = 1 Then Return 0                                                     
+If cosine = -1 Then Return Pi()                                                 
+Return 1.570796 - Atan(cosine / Sqr(1 - cosine * cosine))                       
+                                                                                
+/***********************************************************************        
+* A T A N                                                              *        
+***********************************************************************/        
+atan:                                                                           
+Procedure                                                                       
+Arg tangent                                                                     
+If tangent = 'UNDEFINED' Then Return 'UNDEFINED'                                
+If tangent = '' Then Do                                                         
+  Call say 'Syntax of the arc tangent function:   ATAN(TANGENT)'                
+  Call msg 'Result is the angle whose tangent is TANGENT.'                      
+  Return ''                                                                     
+End                                                                             
+If Datatype(tangent) = 'CHAR' Then Return 'UNDEFINED'                           
+If tangent = 0 Then Return 0                                                    
+Parse Numeric prec .                                                            
+If tangent + tangent <= 1 Then Do                                               
+  sum = tangent                                                                 
+  sign = -1                                                                     
+  Do k = 3 to prec * 10 by 2                                                    
+    sum = sum + sign * tangent ** k / k                                         
+    sign = -sign                                                                
+  End                                                                           
+  Return 1 * sum                                                                
+End                                                                             
+Else Do                                                                         
+  sum = Pi() / 2 - 1 / tangent                                                  
+  sign = 1                                                                      
+  Do k = 3 to prec * 10 by 2                                                    
+    sum = sum + sign / (k * tangent ** k)                                       
+    sign = -sign                                                                
+  End                                                                           
+  Return 1 * sign                                                               
+End                                                                             
+                                                                                
+/***********************************************************************        
+* E X P                                                                *        
+***********************************************************************/        
+exp:                                                                            
+Procedure                                                                       
+Arg power                                                                       
+If power = 'UNDEFINED' Then Return 'UNDEFINED'                                  
+If power = '' Then Do                                                           
+  Call say 'Syntax of the exponentiation function:  EXP(POWER)'                 
+  Call say 'Result is e(2.71828...) raised to POWER'                            
+  Call msg 'Also see the function POW'                                          
+  Return ''                                                                     
+End                                                                             
+If Datatype(power) = 'CHAR' Then Return 'UNDEFINED'                             
+Parse Numeric prec .                                                            
+If power = 0 Then Return 1                                                      
+If power = 1 & prec < 54 Then Return 1 * E53()                                  
+If power < 0 Then Return 1 / Exp(-power)                                        
+If power > 1 Then Return E53() ** (power % 1) * Exp(power // 1)                 
+sum = 1 + power                                                                 
+Do i = 2 to prec * 3                                                            
+  sum = sum + ((power ** i) / (!(i)))                                           
+End                                                                             
+Return 1 * sum                                                                  
+                                                                                
+/***********************************************************************        
+* L O G                                                                *        
+***********************************************************************/        
+log:                                                                            
+Procedure                                                                       
+Arg power , rest                                                                
+If power = 'UNDEFINED' ! rest = 'UNDEFINED' Then Return 'UNDEFINED'             
+If power = '' Then Do                                                           
+  Call say 'Syntax of the base-e logarithm function:'                           
+  Call say '   LOG(P)  or LN(P)'                                                
+  Call say 'Result is the naperian logarithm of P'                              
+  Call say 'If two arguments are specified,'                                    
+  Call msg 'the function LOGB is assummed.'                                     
+  Return ''                                                                     
+End                                                                             
+If Datatype(power) = 'CHAR' Then Return 'UNDEFINED'                             
+If rest ^= '' Then Return Logb(power,rest)                                      
+If power = 0 Then Call msg 'Logarithm is negative infinity'                     
+If power <= 0 Then Return 'UNDEFINED'                                           
+Parse Numeric prec .                                                            
+If power = 10 & prec < 54 Then Return 1 * Lnten53()                             
+scinot = Format(power,,,,0)                                                     
+Parse Var scinot number 'E' pow                                                 
+If pow ^= '' Then Return pow * Lnten53() + Log(number)                          
+y = (power - 1) / (power + 1)                                                   
+sum = y                                                                         
+iter = 20                                                                       
+If power > 10 Then iter = 50                                                    
+Do k = 3 to prec * iter by 2                                                    
+  sum = sum + (y ** k) / k                                                      
+End                                                                             
+Return 2 * sum                                                                  
+                                                                                
+/***********************************************************************        
+* L N                                                                  *        
+***********************************************************************/        
+ln:                                                                             
+Procedure                                                                       
+Arg power                                                                       
+Return Log(power)                                                               
+                                                                                
+/***********************************************************************        
+* L O G 1 0                                                            *        
+***********************************************************************/        
+log10:                                                                          
+Procedure                                                                       
+Arg power                                                                       
+If power = 'UNDEFINED' Then Return 'UNDEFINED'                                  
+If power = '' Then Do                                                           
+  Call say 'Syntax of the base-10 logarithm function:'                          
+  Call say '   LOG10(P)  or LOGT(P)'                                            
+  Call say 'Result is the (common) logarithm of P'                              
+  Call msg 'to the base 10'                                                     
+  Return ''                                                                     
+End                                                                             
+If Datatype(power) = 'CHAR' Then Return 'UNDEFINED'                             
+Return Logb(power,10)                                                           
+                                                                                
+/***********************************************************************        
+* L O G T                                                              *        
+***********************************************************************/        
+logt:                                                                           
+Procedure                                                                       
+Arg power                                                                       
+Return Log10(power)                                                             
+                                                                                
+/***********************************************************************        
+* L O G B                                                              *        
+***********************************************************************/        
+logb:                                                                           
+Procedure                                                                       
+Arg p , b                                                                       
+If p = 'UNDEFINED' ! b = 'UNDEFINED' Then Return 'UNDEFINED'                    
+If p = '' ! b = '' Then Do                                                      
+  Call say 'Syntax of the general logarithm function: LOGB(P,B)'                
+  Call msg 'Result is the logarithm of P to the base of B'                      
+  Return ''                                                                     
+End                                                                             
+If Datatype(p) = 'CHAR' ! Datatype(b) = 'CHAR' Then Return 'UNDEFINED'          
+If b = 1 Then Return 'UNDEFINED'                                                
+logp = Log(p)                                                                   
+logp = Log(b)                                                                   
+If logb = 0 Then Do                                                             
+  Call msg 'Logarithm is infinity'                                              
+  Return 'UNDEFINED'                                                            
+End                                                                             
+If logp = 'UNDEFINED' ! logb = 'UNDEFINED' Then Return 'UNDEFINED'              
+Return logp / logb                                                              
+                                                                                
+/***********************************************************************        
+* P O W                                                                *        
+***********************************************************************/        
+pow:                                                                            
+Procedure                                                                       
+Arg base , exponent                                                             
+If base = 'UNDEFINED' ! exponent = 'UNDEFINED' Then Return 'UNDEFINED'          
+If base = '' ! exponent = '' Then Do                                            
+  Call say 'Syntax of the power function:  POW(BASE,EXPONENT)'                  
+  Call msg 'Result is the vlaue of BASE raised to the EXPONENT'                 
+  Return ''                                                                     
+End                                                                             
+If Datatype(base) = 'CHAR' Then Return 'UNDEFINED'                              
+If Datatype(exponent,'W') Then Return base ** exponent                          
+base = Log(base)                                                                
+If base = 'UNDEFINED' Then Return 'UNDEFINED'                                   
+Return Exp(exponent * base)                                                     
+                                                                                
+/***********************************************************************        
+* A R A B I C                                                          *        
+***********************************************************************/        
+arabic:                                                                         
+Procedure                                                                       
+Arg roman                                                                       
+If roman = 'UNDEFINED' Then Return 'UNDEFINED'                                  
+If roman = '' Then Do                                                           
+  Call say 'Syntax is:   ARABIC(ROMAN)'                                         
+  Call say 'Result is the (Arabic-numeral) value of'                            
+  Call msg 'Roman numeral string ROMAN.'                                        
+  Return ''                                                                     
+End                                                                             
+If Verify(roman,'MDCLXVI') ^= 0 Then Do                                         
+  Call msg roman 'is not a number in Roman numerals'                            
+  Return 'UNDEFINED'                                                            
+End                                                                             
+char.1 = 'M'                                                                    
+val.1 = '1000 '                                                                 
+char.2 = 'D'                                                                    
+val.2 = '500 '                                                                  
+char.3 = 'C'                                                                    
+val.3 = '100 '                                                                  
+char.4 = 'L'                                                                    
+val.4 = '50 '                                                                   
+char.5 = 'X'                                                                    
+val.5 = '10 '                                                                   
+char.6 = 'V'                                                                    
+val.6 = '5 '                                                                    
+char.7 = 'I'                                                                    
+val.7 = '1 '                                                                    
+Do i = 1 To 7                                                                   
+  character = char.i                                                            
+  value = val.i                                                                 
+  where = -1                                                                    
+  Do Until Where = 0                                                            
+    where = Pos(character,roman)                                                
+    If where > 0 Then roman = Delstr(Insert(value,roman,where),where,1)         
+  End                                                                           
+End                                                                             
+chars = Words(roman)                                                            
+high = 9e9                                                                      
+If chars > 1 Then Do                                                            
+  high = Format(Word(roman,1))                                                  
+  Do ch = 2 to chars                                                            
+    next = Format(Word(roman,ch))                                               
+    If next > high                                                              
+/*  Then roman = Inset('-',roman,Wordindex(roman,ch-1)-1) */                    
+    Then roman = Insert('-',roman,Wordindex(roman,ch - 1) - 1)                  
+    high = next                                                                 
+  End                                                                           
+End                                                                             
+roman = Translate(roman,'+',' ')                                                
+where = Lastpos('+'+,roman)                                                     
+If where > 0 Then roman = Delstr(roman,where,1)                                 
+Interpret 'numerals=' roman                                                     
+Return numerals                                                                 
+                                                                                
+/***********************************************************************        
+* R A D                                                                *        
+***********************************************************************/        
+rad:                                                                            
+Procedure                                                                       
+Arg degrees                                                                     
+If degrees = 'UNDEFINED' Then Return 'UNDEFINED'                                
+If degress = '' Then Do                                                         
+  Call say 'Syntax of the degress to radians function'                          
+  Call say '    RAD(ANGLE)'                                                     
+  Call say 'Result is (ANGLE * 3.14159....) / 180'                              
+  Call msg 'See also the DEG function'                                          
+  Return ''                                                                     
+End                                                                             
+If Datatype(degress) = 'CHAR' Then Return 'UNDEFINED'                           
+Return degrees * Pi() / 180                                                     
+                                                                                
+/***********************************************************************        
+* D E G                                                                *        
+***********************************************************************/        
+deg:                                                                            
+Procedure                                                                       
+Arg radians                                                                     
+If radians = 'UNDEFINED' Then Return 'UNDEFINED'                                
+If radians = '' Then Do                                                         
+  Call say 'Syntax of the radians to degrees function'                          
+  Call say '    DEG(ANGLE)'                                                     
+  Call say 'Result is (ANGLE * 180) /3.14159...'                                
+  Call msg 'See also the RAD function'                                          
+  Return ''                                                                     
+End                                                                             
+If Datatype(radians) = 'CHAR' Then Return 'UNDEFINED'                           
+Return degrees * 180 / Pi()                                                     
+                                                                                
+/***********************************************************************        
+* H E X                                                                *        
+***********************************************************************/        
+hex:                                                                            
+Procedure                                                                       
+Arg number                                                                      
+If number = 'UNDEFINED' Then Return 'UNDEFINED'                                 
+If number = '' Then Do                                                          
+  Call say 'Syntax of the decimal to hexadecimal function:'                     
+  Call say '      HEX(DEC)'                                                     
+  Call say 'Result is the hexadecimal representation of the'                    
+  Call say 'whole number DEC'                                                   
+  Call msg 'See also the DEC function'                                          
+  Return ''                                                                     
+End                                                                             
+If Datatype(number,'W') ^= 1 Then Do                                            
+  Call msg number 'is not a whole number'                                       
+  Return 'UNDEFINED'                                                            
+End                                                                             
+Else Return D2x(number)                                                         
+                                                                                
+/***********************************************************************        
+* B I G G E S T _ P O W E R _ O F _ T W O                              *        
+***********************************************************************/        
+biggest_power_of_two:                                                           
+Procedure                                                                       
+Arg number                                                                      
+If Datatype(number,'W') Then Return 'UNDEFINED'                                 
+If number <= 1 Then Return 0                                                    
+answer = 1                                                                      
+Do Forever                                                                      
+  If number < 2 Then Leave                                                      
+  answer = answer + 1                                                           
+End                                                                             
+Return answer - 1                                                               
+                                                                                
+/***********************************************************************        
+* B I N                                                                *        
+***********************************************************************/        
+bin:                                                                            
+Procedure                                                                       
+Arg number                                                                      
+If number = 'UNDEFINED' Then Return 'UNDEFINED'                                 
+If number = '' Then Do                                                          
+  Call say 'Syntax of the whole number to binary function:'                     
+  Call say '     BIN(TENS)'                                                     
+  Call say 'Result is the binary representation of the whole'                   
+  Call say 'number of TENS'                                                     
+  Call msg 'See also the TENS function.'                                        
+  Return ''                                                                     
+End                                                                             
+If number = 0 Then Return '0'                                                   
+If Datatype(number,'W') ^= 1 Then Do                                            
+  Call msg number 'is not a decimal number'                                     
+  Return 'UNDEFINED'                                                            
+End                                                                             
+Else Do                                                                         
+  lntwo = 1 * Lntwo53()                                                         
+  most = Biggest_power_of_two(number)                                           
+  If most = 'UNDEFINED' Then Return most                                        
+  answer = '1'Copies('0',most)                                                  
+  long = most + 1                                                               
+  number = number - 2 ** (most)                                                 
+  Do Forever                                                                    
+    If number < 1 Then Leave                                                    
+    most = Biggest_power_of_two(number)                                         
+    answer = Overlay('1',answer,long-most)                                      
+    number = number - 2 ** (most)                                               
+  End                                                                           
+End                                                                             
+answer = Strip(answer,1,'0')                                                    
+If answer = '' Then answer = '0'                                                
+Return answer                                                                   
+                                                                                
+/***********************************************************************        
+* T E N S                                                              *        
+***********************************************************************/        
+tens:                                                                           
+Procedure                                                                       
+Arg number , firstbase                                                          
+If number = 'UNDEFINED' Then Return 'UNDEFINED'                                 
+If number = '' Then Do                                                          
+  Call say 'Syntax of the change to base 10 function:'                          
+  Call say '  TENS(BINARY) or TENS(NUMBER,BASE)'                                
+  Call say 'Result is the representation in base 10 of the'                     
+  Call say 'binary number BINARY or the base BASE number'                       
+  Call say 'NUMBER (where BASE is a base-10 value < 37)'                        
+  Call msg 'See also then BIN, DEC and HEX functions'                           
+  Return ''                                                                     
+End                                                                             
+If firstbase = '' Then firstbase = 2                                            
+If Datatype(firstbase) - 'CHAR' Then Return 'UNDEFINED'                         
+If firstbase < 2 ! firstbase > 36 Then Do                                       
+  Call msg 'The base must be bigger than 1 and less than 37'                    
+  Return 'UNDEFINED'                                                            
+End                                                                             
+number = Strip(number)                                                          
+allowable = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'                              
+allowable = Substr(allowable,1,firstbase)                                       
+If Verify(number,allowable) ^= 1 Then Do                                        
+  Call msg number 'is not a number in base' firstbase                           
+  Return 'UNDEFINED'                                                            
+End                                                                             
+Else Do                                                                         
+  n = Length(number)                                                            
+  answer = 0                                                                    
+  Do i = 0 To n - 1                                                             
+    place = firstbase ** i                                                      
+    digit = Pos(Substr(number,n - 1),allowable) - 1                             
+    answer = digit * place + answer                                             
+  End                                                                           
+End                                                                             
+Return answer                                                                   
+                                                                                
+/***********************************************************************        
+* D E C                                                                *        
+***********************************************************************/        
+dec:                                                                            
+Procedure                                                                       
+Arg number                                                                      
+If number = 'UNDEFINED' Then Return 'UNDEFINED'                                 
+If number = '' Then Do                                                          
+  Call say 'Syntax of the hexadecimal to decimal function:'                     
+  Call say '   DEC(HEX)'                                                        
+  Call say 'Result is the decimal representation of the'                        
+  Call say 'hexadecimal value(HEX)'                                             
+  Call msg 'See also the HEX function.'                                         
+  Return ''                                                                     
+End                                                                             
+If Datatype(number,'X') ^= 1 Then Do                                            
+  Call msg number 'is not a hexadecimal number'                                 
+  Return 'UNDEFINED'                                                            
+End                                                                             
+Else Return X2d(number)                                                         
+                                                                                
+/***********************************************************************        
+* X                                                                    *        
+***********************************************************************/        
+x:                                                                              
+Procedure                                                                       
+Parse Upper Arg args                                                            
+If Index(args,'UNDEFINED') > 0 Then Return 'UNDEFINED'                          
+If args = '' Then Do                                                            
+  Call say 'Syntax of the hex calculation function:'                            
+  Call say '    X(expression)'                                                  
+  Call say 'Where expression is an arithmetic expression'                       
+  Call say 'with all the numbers in hex'                                        
+  Call say 'Example - x('(a+c)/2)'                                              
+  Call say ''                                                                   
+  Call say 'Important: the expression must be quoted:'                          
+  Call say 'Correct - x('(19+1)')                                               
+  Call msg 'Incorrect - x(19+1)'                                                
+  Return ''                                                                     
+End                                                                             
+args = Space(args,0)                                                            
+expression = ''                                                                 
+Do While args <> ''                                                             
+  operator_pos = Verify(args,'0123456789ABCDEF')                                
+  If operator_pos > 0 Then Do                                                   
+    If operator_pos = 1 Then operand = ''                                       
+    Else operand = X2d(Substr(args,1,operator_pos - 1))                         
+    operator = Substr(args,operator_pos,1)                                      
+    args = Substr(args,operator_pos + 1)                                        
+    expression = expression operand operator                                    
+  End                                                                           
+  Else Do                                                                       
+    operand = X2d(args)                                                         
+    args = ''                                                                   
+    expression = expression operand                                             
+  End                                                                           
+  If ^Datatype(operand,'X') Then Do                                             
+    Call msg operand 'is not a hexadecimal number'                              
+    Return 'UNDEFINED'                                                          
+  End                                                                           
+End                                                                             
+Interpret 'answer =' expression                                                 
+Return D2x(answer)                                                              
+                                                                                
+/***********************************************************************        
+* C H A R                                                              *        
+***********************************************************************/        
+char:                                                                           
+Procedure                                                                       
+Arg number                                                                      
+If number = 'UNDEFINED' Then Return 'UNDEFINED'                                 
+If number = '' Then Do                                                          
+  Call say 'Syntax of the number to character function:'                        
+  Call say '    CHAR(NUM)'                                                      
+  Call say 'Result is the character representation of the'                      
+  Call say 'whole number NUM'                                                   
+  Call msg 'See also the NUM function'                                          
+  Return ''                                                                     
+End                                                                             
+If Datatype(number,'W') ^= 1 Then Do                                            
+  Call msg number 'is not a whole number'                                       
+  Return 'UNDEFINED'                                                            
+End                                                                             
+Else Return D2c(number)                                                         
+                                                                                
+/***********************************************************************        
+* N U M                                                                *        
+***********************************************************************/        
+num:                                                                            
+Procedure                                                                       
+Parse Arg number                                                                
+If number = 'UNDEFINED' Then Return 'UNDEFINED'                                 
+If number = '' Then Do                                                          
+  Call say 'Syntax of the number to character function:'                        
+  Call say '    NUM(CHAR)'                                                      
+  Call say 'Result is the character representation of the'                      
+  Call say 'whole number CHAR'                                                  
+  Call say 'If CHAR contains lower case letters, enclose it'                    
+  Call say 'in quotes'                                                          
+  Call msg 'See also the NUM function'                                          
+  Return ''                                                                     
+End                                                                             
+Return C2d(number)                                                              
+                                                                                
+/***********************************************************************        
+* A B S                                                                *        
+***********************************************************************/        
+abs:                                                                            
+Procedure                                                                       
+Arg value                                                                       
+If value = 'UNDEFINED' Then Return 'UNDEFINED'                                  
+If value = '' Then Do                                                           
+  Call say 'Syntax of the absolute value function:'                             
+  Call say '    ABS(VALUE)'                                                     
+  Call say 'Result is VALUE if its positive and'                                
+  Call msg '-VALUE when its negative'                                           
+  Return ''                                                                     
+End                                                                             
+If Datatype(value) = 'CHAR' Then Return 'UNDEFINED'                             
+Return Abs(value)                                                               
+                                                                                
+/***********************************************************************        
+* M I N                                                                *        
+***********************************************************************/        
+min:                                                                            
+Procedure                                                                       
+Arg v.0,v.1,v.2,v.3,v.4,v.5,v.6,v.7,v.8,v.9                                     
+values = ''                                                                     
+Do i = 0 To Arg() - 1                                                           
+  values = values','Arg(i + 1)                                                  
+End                                                                             
+values = Substr(values,2)                                                       
+If Pos('UNDEFINED',values) ^= 0 Then Return 'UNDEFINED'                         
+If values = '' Then Do                                                          
+  Call say 'Syntax of the minimum function:'                                    
+  Call say '   MIN(A,B,C,...)'                                                  
+  Call say 'Result is the smallest of A,B,C...'                                 
+  Call msg 'Up to 10 numbers are allowed'                                       
+  Return ''                                                                     
+End                                                                             
+Interpret 'call "MIN"' values                                                   
+Return result                                                                   
+                                                                                
+/***********************************************************************        
+* M A X                                                                *        
+***********************************************************************/        
+max:                                                                            
+Procedure                                                                       
+Arg v.0,v.1,v.2,v.3,v.4,v.5,v.6,v.7,v.8,v.9                                     
+values = ''                                                                     
+Do i = 0 To Arg() - 1                                                           
+  values = values','Arg(i + 1)                                                  
+End                                                                             
+values = Substr(values,2)                                                       
+If Pos('UNDEFINED',values) ^= 0 Then Return 'UNDEFINED'                         
+If values = '' Then Do                                                          
+  Call say 'Syntax of the maximum function:'                                    
+  Call say '   MAX(A,B,C,...)'                                                  
+  Call say 'Result is the largest of A,B,C...'                                  
+  Call msg 'Up to 10 numbers are allowed'                                       
+  Return ''                                                                     
+End                                                                             
+Interpret 'call "MAX"' values                                                   
+Return result                                                                   
+                                                                                
+/***********************************************************************        
+* S Y N T A X                                                          *        
+***********************************************************************/        
+syntax:                                                                         
+Call getout "ERROR -- that does not compute!"                                   
+                                                                                
+/***********************************************************************        
+* H A L T                                                              *        
+***********************************************************************/        
+halt:                                                                           
+Call getout "*** Interrupted ***"                                               
+                                                                                
+/***********************************************************************        
+* G E T O U T                                                          *        
+***********************************************************************/        
+getout:                                                                         
+Procedure                                                                       
+Parse Source . . myfilename myfiletype myfilemode .                             
+Parse Arg message                                                               
+Call output message                                                             
+If result <> 0 Then Exit 24                                                     
+'VSCREEN WAITT *'                                                               
+Parse Numeric precision .                                                       
+Push 'EXEC' myfilename ':'precision                                             
+Exit                                                                            
+                                                                                
+/***********************************************************************        
+* H E L P I N F O                                                      *        
+***********************************************************************/        
+helpinfo:                                                                       
+Procedure                                                                       
+Address Command                                                                 
+Parse Arg argument                                                              
+Call window_setup_calchelp                                                      
+'VSCREEN CLEAR CALCHELP'                                                        
+Select                                                                          
+  When argument = '??' Then Call longhelp                                       
+  When argument = '?' Then Call longhelp                                        
+  Otherwise Nop                                                                 
+End                                                                             
+'WINDOW SHOW CALCHELP ON CALCHELP 1 2'                                          
+helpkeys = 'F2=Top F3=Quit F7=Back F8=Forward F12=Bottom'                       
+'VSCREEN WRITE CALCHELP -1 1' Length(helpkeys) + 1 ,                            
+ '(RESERVED HI FIELD' helpkeys                                                  
+'VSCREEN WAITT *'                                                               
+Do Forever                                                                      
+  'VSCREEN WAITREAD CALCHELP'                                                   
+  Parse Var waitread.1 key key_number .                                         
+  If key_number > 12 Then Key_number = key_number - 12                          
+  Select                                                                        
+    When Rc = 4 Then Call window_setup_calchelp                                 
+    When Rc <> 0 Then Call bailout Rc                                           
+    When key = 'PFKEY' Then Do                                                  
+      Select                                                                    
+        When key_number = 2 Then 'WINDOW TOP CALCHELP'                          
+        When key_number = 3 Then Leave                                          
+        When key_number = 7 Then 'WINDOW BACKWARD CALCHELP'                     
+        When key_number = 8 Then 'WINDOW FORWARD CALCHELP'                      
+        When key_number = 12 Then Do                                            
+          'WINDOW BOTTOM CALCHELP'                                              
+          'WINDOW BACK CALCHELP'                                                
+          'WINDOW DOWN CALCHELP 1'                                              
+        End                                                                     
+        Otherwise Do                                                            
+          'VSCREEN ALARM CALCHELP'                                              
+          Call msg 'PF Key' key_number 'does not have' ,                        
+           'any function here.'                                                 
+        End                                                                     
+      End                                                                       
+    End                                                                         
+    When key = 'PAKEY' Then Select                                              
+      When key_number = 1 Then 'WINDOW POP WM'                                  
+      Otherwise Nop                                                             
+    End                                                                         
+    When key = 'CLEAR' Then Nop                                                 
+    When key = 'ENTER' Then Nop                                                 
+    Otherwise 'VSCREEN ALARM CALCHELP'                                          
+  End                                                                           
+End                                                                             
+'VSCREEN WRITE CALCHELP -1 1' Length(helpkeys) + 1 '(RESERVED HI FIELD'         
+'WINDOW DROP CALCHELP'                                                          
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* L O N G H E L P                                                      *        
+***********************************************************************/        
+longhelp:                                                                       
+Procedure                                                                       
+Address Command                                                                 
+Call line_marker                                                                
+Call say_message 'CALCHELP' line_number + 3                                     
+/*                                                                              
+CALC is an interactive calculator with assignable precision,                    
+name-addressable memory and power series expansions for several                 
+logarithmic, exponentian and trigonometric functions.                           
+                                                                                
+You may enter 3 kinds of input in the CALC window, or you may                   
+enter CMS or XEDIT commands on the CALC command line.                           
+                                                                                
+Input in the CALC window:                                                       
+                                                                                
+(1) EXPRESSION. You may enter any valid arithmetic, boolean or                  
+    character expression and CALC will evaluate it and display                  
+    the result. Examples are 2+2 or sqrt(12).                                   
+                                                                                
+(2) OPERATOR EXPRESSION. If an expression is preceeded with an                  
+    operator (e.g. "+" or "-"), then the expression is evaluated                
+    and the operation is applied to the result and the last                     
+    previous result. This is a complicated way of saying that                   
+    CALC acts like an ordinary calculator. For example, if you                  
+    enter the expression "2+2" (so CALC displays "4") and then                  
+    enter "+12", CALC will display "16".                                        
+                                                                                
+(3) SET VARIABLE = EXPRESSION. This allows you to save results                  
+    in memory. For example if you enter SET T = SQRT(9), CALC                   
+    will create a variable named T and store the value of 3 in                  
+    it. If you then enter T+7, CALC will display 10. After                      
+    having entered any of these inputs, you can scroll the                      
+    window back, edit you input, and re-enter it. In fact you                   
+    can also edit output and enter it as input.                                 
+                                                                                
+    CALC maintains a variable named LAST, in which it stores                    
+    the last expression evaluated. Thus, entering 2+2 is                        
+    implicitly identical to SET LAST = 2+2 and entering -9                      
+    is implicitly identical to entering SET LAST = LAST - 9.                    
+                                                                                
+    CALC also provides two other named variables, the                           
+    transcendental constants PI and E.                                          
+                                                                                
+*/                                                                              
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* L I N E _ M A R K E R                                                *        
+***********************************************************************/        
+line_marker:                                                                    
+line_number = Sigl                                                              
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* S A Y _ M E S S A G E                                                *        
+***********************************************************************/        
+say_message:                                                                    
+Procedure                                                                       
+Address Command                                                                 
+Parse Arg vscreen line .                                                        
+stopper = '*/'                                                                  
+Do i = line                                                                     
+  msg = Sourceline(i)                                                           
+  If msg = stopper Then Leave                                                   
+  'VSCREEN WRITE' vscreen '0 1' Length(msg) + 1 '(NOHIGH FIELD' msg             
+End                                                                             
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* M S G                                                                *        
+***********************************************************************/        
+msg:                                                                            
+Procedure                                                                       
+Address Command                                                                 
+Parse Arg message                                                               
+'VSCREEN WAITT *'                                                               
+'VSCREEN WRITE CALCMSG 0 1' Length(message) + 1 '(HOHIGH FIELD' message         
+If rc <> 0 Then Do                                                              
+  Say message                                                                   
+  Return Rc                                                                     
+End                                                                             
+'VSCREEN CURSOR CALCMSG -1 26 (RESERVED'                                        
+Do Forever                                                                      
+  'VSCREEN WAITREAD CALCMSG'                                                    
+  Select                                                                        
+    When Rc = 4 Then Call window_setup_calcmsg                                  
+    When Rc <> 0 Then Call bailout rc                                           
+    When waitread.1 = 'ENTER' ! waitread.1 = 'CLEAR' ! rc =28                   
+    Then Leave                                                                  
+    Otherwise 'VSCREEN ALARM CALCMSG'                                           
+  End                                                                           
+End                                                                             
+'VSCREEN CLEAR CALCMSG'                                                         
+Return 0                                                                        
+                                                                                
+/***********************************************************************        
+* S A Y                                                                *        
+***********************************************************************/        
+say:                                                                            
+Procedure                                                                       
+Address Command                                                                 
+Parse Arg message                                                               
+'VSCREEN WRITE CALCMSG 0 1' Length(message) + 1 '(NOHIGH FIELD' message         
+If Rc <> 0 Then Say message                                                     
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* C A L C _ B O T T O M                                                *        
+***********************************************************************/        
+calc_bottom:                                                                    
+Procedure                                                                       
+Address Command                                                                 
+'VSCREEN WAITT *'                                                               
+'QUERY WINDOW CALC (LIFO)'                                                      
+If Rc = 0 Then Parse Pull . . rows .                                            
+Else rows = 12                                                                  
+'WINDOW BOTTOM CALC'                                                            
+'WINDOW UP CALC' rows - 6                                                       
+'VSCREEN WAITT *'                                                               
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* S E T _ L O G F I L E                                                *        
+***********************************************************************/        
+set_logfile:                                                                    
+Procedure Expose logging                                                        
+If logging Then Do                                                              
+  'VSCREEN WRITE CALC 1 1 11 (RESERVED HIGH',                                   
+   'DATA Logfile on'                                                            
+  'SET LOGFILE CALC ON CALC'                                                    
+End                                                                             
+Else Do                                                                         
+  'VSCREEN WRITE CALC 1 1 11 (RESERVED HIGH DATA  '                             
+  'SET LOGFILE CALC OFF'                                                        
+End                                                                             
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* W I N D O W _ S E T U P                                              *        
+***********************************************************************/        
+window_setup:                                                                   
+Procedure                                                                       
+Address Command                                                                 
+'VSCREEN DEFINE CALC 240 80 1 3 (TURQ REV SYSTEM)'                              
+'WINDOW DEFINE CALC 12 40 8 35 (FIXED BORDER POP TOP SYSTEM)'                   
+If Rc = 3 Then Do                                                               
+  Parse Value Diag(8c) With 3 width 5 height 7                                  
+  If height = '' Then Exit 57                                                   
+  prows = C2d(height)                                                           
+  pcols = C2d(width)                                                            
+  'QUERY WINDOW CALC (LIFO)'                                                    
+  Parse Pull . . rows cols top left .                                           
+  rows = Min(rows,prows - 2)                                                    
+  cols = Min(cols,pcols - 3)                                                    
+  left = Min(left,pcols - cols - 1)                                             
+  If top > 0 Then top = Min(top,prows - rows)                                   
+  Else top = Max(top,rows - prows)                                              
+  'WINDOW POSITION CALC' top left                                               
+  'WINDOW SIZE CALC' rows cols                                                  
+End                                                                             
+'WINDOW SHOW CALC ON CALC 1 2'                                                  
+If Rc <> 0 Then Exit Rc                                                         
+'SET LOCATION CALC OFF'                                                         
+'SET BORDER CALC ON (PINK REV'                                                  
+'VSCREEN WRITE CALC 1 1 40 (RESERVED HI FIELD' ,                                
+ Center('CALC',36)                                                              
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* W I N D O W _ S E T U P _ C A L C H E L P                            *        
+***********************************************************************/        
+window_setup_calchelp:                                                          
+Procedure                                                                       
+Address Command                                                                 
+'VSCREEN DEFINE CALCHELP 120 75 2 2 (BLUE REV NOPROT USER)'                     
+'WINDOW DELETE CALCHELP'                                                        
+'QUERY DISPLAY (LIFO)'                                                          
+If Rc = 0 Then Parse Pull . rows .                                              
+Else Exit Rc                                                                    
+'WINDOW DEFINE CALCHELP' rows - 2 '75 2 3 (FIXED BORDER POP TOP USER)'          
+'WINDOW HIDE CALCHELP ON CALCHELP 1 1'                                          
+If Rc <> 0 Then Exit Rc                                                         
+'SET BORDER CALCHELP ON (YELLOW REV'                                            
+'VSCREEN WRITE CALCHELP 1 1 73 (RESERVED HI FIELD' ,                            
+ Center('CALC Help',72)                                                         
+'VSCREEN WAITT CALCHELP'                                                        
+'WINDOW DROP CALCHELP'                                                          
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* W I N D O W _ S E T U P _ C A L C M S G                              *        
+***********************************************************************/        
+window_setup_calcmsg:                                                           
+Procedure                                                                       
+Address Command                                                                 
+'VSCREEN DEFINE CALCMSG 12 52 0 2 (YELLOW REV USER)'                            
+'WINDOW DELETE CALCMSG'                                                         
+'QUERY DISPLAY (LIFO)'                                                          
+If Rc = 0 Then Parse Pull . rows .                                              
+Else Exit Rc                                                                    
+'WINDOW DEFINE CALCMSG' rows - 11 '52 12 6 (VARIABLE ,                          
+ BORDER POP TOP USER)'                                                          
+'WINDOW SHOW CALCMSG ON CALCMSG 1 2'                                            
+If Rc <> 0 Then Exit Rc                                                         
+'SET LOCATION CALCMSG OFF'                                                      
+'SET BORDER CALCMSG ON (TURQ REV'                                               
+'VSCREEN WRITE CALCMSG -1 1 25 (RESERVED HI FIELD',                             
+ 'Press ENTER to continue.'                                                     
+'VSCREEN WAITT CALCMSG'                                                         
+'WINDOW DROP CALCMSG'                                                           
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* W I N D O W _ D E L E T E                                            *        
+***********************************************************************/        
+window_delete:                                                                  
+Procedure                                                                       
+Address Command                                                                 
+'WINDOW DELETE CALCMSG'                                                         
+'WINDOW DELETE CALCHELP'                                                        
+'WINDOW DELETE CALC'                                                            
+'VSCREEN DELETE CALCMSG'                                                        
+'VSCREEN DELETE CALCHELP'                                                       
+'VSCREEN DELETE CALC'                                                           
+'GLOBALV SELECT CALC PURGE'                                                     
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* B A I L O U T                                                        *        
+***********************************************************************/        
+bailout:                                                                        
+Procedure                                                                       
+Parse Arg retcode                                                               
+Call window_delete                                                              
+Say 'Unexpected VSCREEN error, rc='retcode                                      
+Exit retcode                                                                    
