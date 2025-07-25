@@ -1,0 +1,149 @@
+/**********************************************************************         
+*  Routine: FTREN EXEC                                                *         
+*  Purpose: To rename files. Filetype will always have a number       *         
+*           precedding it. Thus, if filetype is EXEC and FTREN is     *         
+*           used then filetype will be 1EXEC. If filetype is 3EXEC    *         
+*           and FTREN is used then filetype will be 4EXEC. If filetype*         
+*           is 0EXEC and FTREN is used then that file will be renamed *         
+*           to be EXEC.                                               *         
+*  Calls:   None                                                      *         
+*  Called By: User                                                    *         
+*  File Needed:                                                       *         
+*  Notes:                                                             *         
+***********************************************************************/        
+                                                                                
+/***********************************************************************        
+* S T A R T                                                            *        
+***********************************************************************/        
+start:                                                                          
+/***********************************************************************        
+* The start and end of the whole procedure                             *        
+***********************************************************************/        
+Trace O                                                                         
+Address Cms                                                                     
+Parse Arg f_name f_type f_mode                                                  
+Upper f_name f_type f_mode                                                      
+Call setup_variables                                                            
+Call check_file                                                                 
+Call check_versions                                                             
+Exit error_rc                                                                   
+                                                                                
+/***********************************************************************        
+* S E T U P _ V A R I A B L E S                                        *        
+***********************************************************************/        
+setup_variables:                                                                
+/***********************************************************************        
+* Set a number of variables to be used throught the routine            *        
+***********************************************************************/        
+done = 0                                                                        
+error_rc = 0                                                                    
+Parse Source . . . . . msgid .                                                  
+Upper msgid                                                                     
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* C H E C K _ V E R S I O N S                                          *        
+***********************************************************************/        
+check_versions:                                                                 
+/***********************************************************************        
+* See if old versions already exist and if so then increment the name  *        
+* by 1 up to 9.                                                        *        
+***********************************************************************/        
+Do i = 9 To 1 By - 1 Until i = 1                                                
+  'Pipe Command STATE' f_name i!!f_type f_mode                                  
+  error_rc = Rc                                                                 
+  If error_rc = 0 Then Do                                                       
+    Select                                                                      
+      When i = 9 Then Do                                                        
+        'Pipe Command ERASE' f_name i!!f_type f_mode                            
+        done = 1                                                                
+        Iterate                                                                 
+      End                                                                       
+      Otherwise Do                                                              
+        Say msgid!!'02I' f_name i!!f_type ,                                     
+         'found and will be renamed + 1 version.'                               
+        x = i + 1                                                               
+        'Pipe Command RENAME' f_name i!!f_type f_mode ,                         
+         f_name x!!f_type f_mode                                                
+        error_rc = Rc                                                           
+        If error_rc ^= 0 Then Do                                                
+          Exit error_rc                                                         
+        End                                                                     
+        done = done + 1                                                         
+        Iterate                                                                 
+      End                                                                       
+    End                                                                         
+  End                                                                           
+End                                                                             
+'Pipe Command RENAME' f_name of_type f_mode ,                                   
+ f_name '1'!!f_type f_mode                                                      
+error_rc = Rc                                                                   
+If error_rc ^= 0 Then Do                                                        
+  Exit error_rc                                                                 
+End                                                                             
+Return                                                                          
+                                                                                
+/***********************************************************************        
+* C H E C K _ F I L E                                                  *        
+***********************************************************************/        
+check_file:                                                                     
+/***********************************************************************        
+* Make sure that we have an input file available or else it will not   *        
+* work. Also if filetype begins with 0 then that file will be the new  *        
+* live version.                                                        *        
+***********************************************************************/        
+If f_name = '' Then Do                                                          
+  Say 'No filename specified. Exiting.'                                         
+  error_rc = 1                                                                  
+  Exit error_rc                                                                 
+End                                                                             
+Else f_mode = Strip(f_mode)                                                     
+If f_type = '' Then Do                                                          
+  error_rc = 2                                                                  
+  Say 'No filetype specified. Exiting.'                                         
+  Exit error_rc                                                                 
+End                                                                             
+If Substr(f_type,1,1) = '0' Then Do                                             
+  nf_type = Strip(f_type,'L','0')                                               
+  'STATE' f_name nf_type f_mode                                                 
+  If Rc ^= 0 Then Do                                                            
+    'EXEC FTREN' f_name nf_type f_mode                                          
+  End                                                                           
+  'Pipe Command RENAME' f_name f_type f_mode f_name nf_type f_mode              
+  error_rc = Rc                                                                 
+  If error_rc ^= 0 Then Do                                                      
+    Exit error_rc                                                               
+  End                                                                           
+  Exit 0                                                                        
+End                                                                             
+If Length(f_type) >= 8 Then Do                                                  
+  of_type = Strip(f_type)                                                       
+  f_type = Substr(f_type,1,7)                                                   
+End                                                                             
+Else Do                                                                         
+  f_type = Strip(f_type)                                                        
+  of_type = f_type                                                              
+End                                                                             
+If f_mode = '' Then Do                                                          
+  Say 'No filemode specified. Will use filemode A as default.'                  
+  f_mode = 'A'                                                                  
+End                                                                             
+Else Do                                                                         
+  filemode = Strip(f_mode)                                                      
+  filemode = Substr(filemode,1,1)                                               
+  'Pipe CMS Q DISK' filemode '! Drop 1 ! Var read_write'                        
+  Parse Var read_write . . . isit .                                             
+  If isit ^= 'R/W' Then Do                                                      
+    error_rc = 3                                                                
+    Say 'Unable to rename file as it is not R/W. Exiting.'                      
+    Exit error_rc                                                               
+  End                                                                           
+  f_mode = Substr(filemode,1,1)                                                 
+End                                                                             
+'STATE' f_name of_type f_mode                                                   
+error_rc = Rc                                                                   
+If error_rc ^= 0 Then Do                                                        
+  Say 'File does not exist. Exiting.'                                           
+  Exit error_rc                                                                 
+End                                                                             
+Return                                                                          
